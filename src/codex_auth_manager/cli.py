@@ -92,7 +92,6 @@ def use_best_command(accounts: Annotated[list[str] | None, typer.Argument(help="
 
 
 @app.command("remove")
-@app.command("rm")
 def remove_command(name: Annotated[str, typer.Argument(help="Saved account name")]) -> None:
     """Remove a saved account."""
     with _handle_errors():

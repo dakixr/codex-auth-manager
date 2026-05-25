@@ -118,7 +118,7 @@ cxauth switch NAME
 cxauth login NAME [--browser]
 cxauth quota [NAME]
 cxauth use-best [NAME ...]
-cxauth remove NAME  # alias: rm
+cxauth remove NAME
 cxauth export [-o FILE]
 ```
 
