@@ -120,10 +120,11 @@ def identify_active() -> str | None:
         return None
     active_summary = summarize(active_data)
     active_hash = _file_bytes(active_path)
-    for account in list_accounts():
+    accounts = list_accounts()
+    for account in accounts:
         if _file_bytes(account.auth_path) == active_hash:
             return account.name
-    for account in list_accounts():
+    for account in accounts:
         try:
             info = summarize(read_auth(account.auth_path))
         except StorageError:

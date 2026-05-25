@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from codex_auth_manager import cli, storage
+from codex_auth_manager import cli, engine, storage
 from codex_auth_manager import rpc
 from codex_auth_manager.display import quota_block
 from codex_auth_manager.rpc import RateLimit, Snapshot, Window
@@ -84,7 +84,7 @@ class StorageTests(unittest.TestCase):
             updated_auth=rotated,
         )
 
-        with mock.patch.object(cli, "query_quota", return_value=snapshot):
+        with mock.patch.object(engine, "query_quota", return_value=snapshot):
             self.assertEqual(cli.cmd_quota("one"), 0)
 
         self.assertEqual(storage.read_auth(storage.account_path("one"))["tokens"]["refresh_token"], "new")
@@ -116,12 +116,14 @@ class StorageTests(unittest.TestCase):
         self.assertIn("score 32.1", text)
 
     def test_quota_without_name_checks_all_accounts(self) -> None:
+        storage.write_auth(storage.active_auth_path(), auth_data("one", "one@example.com"))
         storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))
         storage.write_auth(storage.account_path("two"), auth_data("two", "two@example.com"))
 
         def fake_query(data: dict[str, object]) -> Snapshot:
             tokens = data["tokens"]
             refresh = tokens["refresh_token"]
+            updated = auth_data(f"{refresh}-rotated", f"{refresh}@example.com")
             return Snapshot(
                 email=f"{refresh}@example.com",
                 plan="plus",
@@ -134,13 +136,15 @@ class StorageTests(unittest.TestCase):
                     plan="plus",
                 ),
                 limits={},
-                updated_auth=data,
+                updated_auth=updated,
             )
 
-        with mock.patch.object(cli, "query_quota", side_effect=fake_query) as query:
+        with mock.patch.object(engine, "query_quota", side_effect=fake_query) as query:
             self.assertEqual(cli.cmd_quota(None), 0)
 
         self.assertEqual(query.call_count, 2)
+        self.assertEqual(storage.read_auth(storage.account_path("one"))["tokens"]["refresh_token"], "one-rotated")
+        self.assertEqual(storage.read_auth(storage.active_auth_path())["tokens"]["refresh_token"], "one-rotated")
 
     def test_login_uses_device_auth_by_default(self) -> None:
         completed = mock.Mock(returncode=0)
@@ -202,7 +206,7 @@ class StorageTests(unittest.TestCase):
             )
 
         with (
-            mock.patch.object(cli, "query_quota", side_effect=fake_query),
+            mock.patch.object(engine, "query_quota", side_effect=fake_query),
             mock.patch.object(cli, "score_snapshot", side_effect=lambda snapshot: score_snapshot(snapshot, now=1_900_000_000)),
         ):
             self.assertEqual(cli.cmd_use_best([]), 0)
@@ -237,10 +241,9 @@ class StorageTests(unittest.TestCase):
             )
 
         with (
-            mock.patch.object(cli, "USE_BEST_WORKERS", 2),
-            mock.patch.object(cli, "_quota_for_selection", side_effect=snapshot_for),
+            mock.patch.object(engine, "fetch_quota", side_effect=snapshot_for),
         ):
-            results = cli._quota_results_for_use_best(["one", "two"])
+            results = engine.fetch_quotas(["one", "two"], workers=2)
 
         self.assertEqual([result.name for result in results], ["one", "two"])
         self.assertTrue(all(result.error is None for result in results))

@@ -5,9 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -16,7 +14,8 @@ import typer
 
 from .auth import AuthSummary, format_epoch, summarize
 from .display import quota_block
-from .rpc import RpcError, Snapshot, query_quota, refresh_auth
+from .engine import fetch_quota, fetch_quotas
+from .rpc import RpcError, Snapshot
 from .selection import score_snapshot
 from .storage import (
     StorageError,
@@ -24,13 +23,11 @@ from .storage import (
     account_summary,
     active_auth_path,
     ensure_dirs,
-    get_account,
     identify_active,
     list_accounts,
     read_auth,
     remove_account,
     switch_account,
-    sync_saved_and_active,
     write_auth,
 )
 
@@ -39,15 +36,7 @@ GREEN = "\033[32m"
 RED = "\033[31m"
 YELLOW = "\033[33m"
 BOLD = "\033[1m"
-USE_BEST_WORKERS = 4
 app = typer.Typer(help="Manage Codex CLI OAuth accounts", no_args_is_help=True)
-
-
-@dataclass(frozen=True)
-class QuotaResult:
-    name: str
-    snapshot: Snapshot | None = None
-    error: Exception | None = None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -192,30 +181,25 @@ def cmd_login(name: str, *, device_auth: bool = True) -> int:
     return 0
 
 
-def _refresh_account(name: str) -> None:
-    account = get_account(name)
-    data = read_auth(account.auth_path)
-    refreshed = refresh_auth(data)
-    sync_saved_and_active(name, refreshed)
-
-
 def cmd_quota(name: str | None) -> int:
     if name is not None:
-        _print_quota(name, _quota_for(name))
+        _print_quota(name, fetch_quota(name, sync_active=True))
         return 0
 
+    active = identify_active()
     successes = 0
     skipped = 0
-    for account in list_accounts():
-        try:
-            snapshot = _quota_for(account.name)
-        except Exception as exc:
-            print(f"{account.name}: skipped ({exc})")
+    for result in fetch_quotas([account.name for account in list_accounts()]):
+        if result.error is not None or result.snapshot is None:
+            exc = result.error or StorageError("missing quota snapshot")
+            print(f"{result.name}: skipped ({exc})")
             skipped += 1
             continue
+        if active == result.name:
+            switch_account(result.name)
         if successes:
             print("")
-        _print_quota(account.name, snapshot)
+        _print_quota(result.name, result.snapshot)
         successes += 1
     if skipped:
         print(f"Skipped {skipped} account(s)")
@@ -230,7 +214,7 @@ def cmd_use_best(names: list[str]) -> int:
     best_score = float("inf")
     best_snapshot: Snapshot | None = None
     skipped = 0
-    for result in _quota_results_for_use_best(candidates):
+    for result in fetch_quotas(candidates):
         if result.error is not None or result.snapshot is None:
             exc = result.error or StorageError("missing quota snapshot")
             print(f"{result.name}: skipped ({exc})")
@@ -287,46 +271,6 @@ def cmd_export(output: str | None) -> int:
             tmp.unlink()
     print(path)
     return 0
-
-
-def _quota_for(name: str) -> Snapshot:
-    account = get_account(name)
-    data = read_auth(account.auth_path)
-    snapshot = query_quota(data)
-    sync_saved_and_active(name, snapshot.updated_auth)
-    return snapshot
-
-
-def _quota_for_selection(name: str) -> Snapshot:
-    account = get_account(name)
-    data = read_auth(account.auth_path)
-    snapshot = query_quota(data)
-    write_auth(account.auth_path, snapshot.updated_auth)
-    return snapshot
-
-
-def _quota_results_for_use_best(names: list[str]) -> list[QuotaResult]:
-    if len(names) <= 1:
-        return [_quota_result(name) for name in names]
-
-    results: list[QuotaResult | None] = [None] * len(names)
-    workers = min(USE_BEST_WORKERS, len(names))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_quota_for_selection, name): (idx, name) for idx, name in enumerate(names)}
-        for future in as_completed(futures):
-            idx, name = futures[future]
-            try:
-                results[idx] = QuotaResult(name=name, snapshot=future.result())
-            except Exception as exc:
-                results[idx] = QuotaResult(name=name, error=exc)
-    return [result for result in results if result is not None]
-
-
-def _quota_result(name: str) -> QuotaResult:
-    try:
-        return QuotaResult(name=name, snapshot=_quota_for_selection(name))
-    except Exception as exc:
-        return QuotaResult(name=name, error=exc)
 
 
 def _print_quota(name: str, snapshot: Snapshot) -> None:

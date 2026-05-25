@@ -89,6 +89,7 @@ cxauth quota dr7878
 ```
 
 Quota output includes usage bars, relative reset timing, and the same pace details used by `use-best`, including reserve/deficit and projected exhaustion.
+When checking every account, live quota requests use the same parallel engine as `use-best`.
 
 Check live quota for every saved account:
 
