@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
+
+import typer
 
 from .auth import AuthSummary, format_epoch, summarize
 from .rpc import RpcError, Snapshot, query_quota, refresh_auth
@@ -32,34 +35,86 @@ GREEN = "\033[32m"
 RED = "\033[31m"
 YELLOW = "\033[33m"
 BOLD = "\033[1m"
+app = typer.Typer(help="Manage Codex CLI OAuth accounts", no_args_is_help=True)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = _parser()
-    args = parser.parse_args(argv)
+    app(args=argv, prog_name="cxauth")
+    return 0
+
+
+@app.command("list")
+def list_command() -> None:
+    """List saved accounts without touching live auth."""
+    with _handle_errors():
+        cmd_list()
+
+
+@app.command("current")
+def current_command() -> None:
+    """Show the active Codex auth identity."""
+    with _handle_errors():
+        cmd_current()
+
+
+@app.command("switch")
+def switch_command(name: Annotated[str, typer.Argument(help="Saved account name")]) -> None:
+    """Switch ~/.codex/auth.json to a saved account."""
+    with _handle_errors():
+        cmd_switch(name)
+
+
+@app.command("login")
+def login_command(
+    name: Annotated[str, typer.Argument(help="Saved account name")],
+    browser: Annotated[bool, typer.Option(help="Use the localhost browser login flow")] = False,
+) -> None:
+    """Login with Codex in an isolated CODEX_HOME and save the result."""
+    with _handle_errors():
+        raise typer.Exit(cmd_login(name, device_auth=not browser))
+
+
+@app.command("quota")
+def quota_command(
+    name: Annotated[str | None, typer.Argument(help="Saved account name. Omit to check all accounts.")] = None,
+) -> None:
+    """Print live quota for one account, or all accounts when NAME is omitted."""
+    with _handle_errors():
+        raise typer.Exit(cmd_quota(name))
+
+
+@app.command("use-best")
+def use_best_command(accounts: Annotated[list[str] | None, typer.Argument(help="Optional account names")] = None) -> None:
+    """Switch to the account with the lowest current quota usage."""
+    with _handle_errors():
+        cmd_use_best(accounts or [])
+
+
+@app.command("remove")
+@app.command("rm")
+def remove_command(name: Annotated[str, typer.Argument(help="Saved account name")]) -> None:
+    """Remove a saved account."""
+    with _handle_errors():
+        cmd_remove(name)
+
+
+@app.command("export")
+def export_command(
+    output: Annotated[str | None, typer.Option("-o", "--output", help="Write exported auth JSON to this file")] = None,
+) -> None:
+    """Export every saved auth JSON. Prints credentials to stdout without -o."""
+    with _handle_errors():
+        cmd_export(output)
+
+
+@contextmanager
+def _handle_errors():
     try:
         ensure_dirs()
-        if args.command == "list":
-            return cmd_list()
-        if args.command == "current":
-            return cmd_current()
-        if args.command == "switch":
-            return cmd_switch(args.name)
-        if args.command == "login":
-            return cmd_login(args.name, device_auth=not args.browser)
-        if args.command == "quota":
-            return cmd_quota(args.name)
-        if args.command == "use-best":
-            return cmd_use_best(args.accounts)
-        if args.command == "remove":
-            return cmd_remove(args.name)
-        if args.command == "export":
-            return cmd_export(args.output)
+        yield
     except (StorageError, RpcError) as exc:
         print(_color(f"Error: {exc}", RED), file=sys.stderr)
-        return 1
-    parser.print_help()
-    return 1
+        raise typer.Exit(1) from exc
 
 
 def cmd_list() -> int:
@@ -132,12 +187,28 @@ def _refresh_account(name: str) -> None:
     sync_saved_and_active(name, refreshed)
 
 
-def cmd_quota(name: str) -> int:
-    snapshot = _quota_for(name)
-    print(f"{BOLD}Quota for {name}{RESET}")
-    print(f"email: {snapshot.email or '-'}")
-    print(f"plan:  {snapshot.plan or '-'}")
-    print(f"quota: {_quota_text(snapshot)}")
+def cmd_quota(name: str | None) -> int:
+    if name is not None:
+        _print_quota(name, _quota_for(name))
+        return 0
+
+    successes = 0
+    skipped = 0
+    for account in list_accounts():
+        try:
+            snapshot = _quota_for(account.name)
+        except Exception as exc:
+            print(f"{account.name}: skipped ({exc})")
+            skipped += 1
+            continue
+        if successes:
+            print("")
+        _print_quota(account.name, snapshot)
+        successes += 1
+    if skipped:
+        print(f"Skipped {skipped} account(s)")
+    if successes == 0:
+        raise StorageError("No usable account found")
     return 0
 
 
@@ -214,25 +285,11 @@ def _quota_for(name: str) -> Snapshot:
     return snapshot
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="cxauth", description="Manage Codex CLI OAuth accounts")
-    sub = parser.add_subparsers(dest="command")
-    sub.add_parser("list")
-    sub.add_parser("current")
-    switch = sub.add_parser("switch")
-    switch.add_argument("name")
-    login = sub.add_parser("login")
-    login.add_argument("name")
-    login.add_argument("--browser", action="store_true", help="use the localhost browser login flow")
-    quota = sub.add_parser("quota")
-    quota.add_argument("name")
-    use_best = sub.add_parser("use-best")
-    use_best.add_argument("accounts", nargs="*")
-    remove = sub.add_parser("remove", aliases=["rm"])
-    remove.add_argument("name")
-    export = sub.add_parser("export")
-    export.add_argument("-o", "--output", help="write exported auth JSON to this file")
-    return parser
+def _print_quota(name: str, snapshot: Snapshot) -> None:
+    print(f"{BOLD}Quota for {name}{RESET}")
+    print(f"email: {snapshot.email or '-'}")
+    print(f"plan:  {snapshot.plan or '-'}")
+    print(f"quota: {_quota_text(snapshot)}")
 
 
 def _quota_text(snapshot: Snapshot) -> str:

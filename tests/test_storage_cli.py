@@ -87,6 +87,33 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(storage.read_auth(storage.account_path("one"))["tokens"]["refresh_token"], "new")
         self.assertEqual(storage.read_auth(storage.active_auth_path())["tokens"]["refresh_token"], "new")
 
+    def test_quota_without_name_checks_all_accounts(self) -> None:
+        storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))
+        storage.write_auth(storage.account_path("two"), auth_data("two", "two@example.com"))
+
+        def fake_query(data: dict[str, object]) -> Snapshot:
+            tokens = data["tokens"]
+            refresh = tokens["refresh_token"]
+            return Snapshot(
+                email=f"{refresh}@example.com",
+                plan="plus",
+                auth_method="chatgpt",
+                default_limit=RateLimit(
+                    limit_id="codex",
+                    limit_name=None,
+                    primary=Window(used_percent=1, resets_at=1_900_000_000, duration_mins=300),
+                    secondary=Window(used_percent=0, resets_at=1_900_000_000, duration_mins=10080),
+                    plan="plus",
+                ),
+                limits={},
+                updated_auth=data,
+            )
+
+        with mock.patch.object(cli, "query_quota", side_effect=fake_query) as query:
+            self.assertEqual(cli.cmd_quota(None), 0)
+
+        self.assertEqual(query.call_count, 2)
+
     def test_login_uses_device_auth_by_default(self) -> None:
         completed = mock.Mock(returncode=0)
 

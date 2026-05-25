@@ -80,6 +80,12 @@ Check one account's live quota:
 cxauth quota dr7878
 ```
 
+Check live quota for every saved account:
+
+```bash
+cxauth quota
+```
+
 Manually switch to a named account:
 
 ```bash
@@ -99,7 +105,7 @@ cxauth export
 cxauth current
 cxauth switch NAME
 cxauth login NAME [--browser]
-cxauth quota NAME
+cxauth quota [NAME]
 cxauth use-best [NAME ...]
 cxauth remove NAME  # alias: rm
 cxauth export [-o FILE]
