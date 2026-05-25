@@ -5,6 +5,8 @@ import os
 import tempfile
 import threading
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 from unittest import mock
@@ -91,6 +93,27 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(storage.read_auth(storage.account_path("one"))["tokens"]["refresh_token"], "new")
         self.assertEqual(storage.read_auth(storage.active_auth_path())["tokens"]["refresh_token"], "new")
 
+    def test_named_quota_marks_active_account(self) -> None:
+        storage.write_auth(storage.active_auth_path(), auth_data("one", "one@example.com"))
+        storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))
+        snapshot = Snapshot(
+            email="one@example.com",
+            plan="plus",
+            auth_method="chatgpt",
+            default_limit=None,
+            limits={},
+            updated_auth=auth_data("one", "one@example.com"),
+        )
+        output = StringIO()
+
+        with (
+            mock.patch.object(engine, "query_quota", return_value=snapshot),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(cli.cmd_quota("one"), 0)
+
+        self.assertTrue(output.getvalue().startswith("\033[1mone *\033[0m\n"))
+
     def test_quota_display_prints_bars_relative_resets_and_pace_info(self) -> None:
         snapshot = Snapshot(
             email="one@example.com",
@@ -141,9 +164,13 @@ class StorageTests(unittest.TestCase):
             )
 
         with mock.patch.object(engine, "query_quota", side_effect=fake_query) as query:
-            self.assertEqual(cli.cmd_quota(None), 0)
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(cli.cmd_quota(None), 0)
 
         self.assertEqual(query.call_count, 2)
+        self.assertIn("\033[1mone *\033[0m\n", output.getvalue())
+        self.assertIn("\033[1mtwo\033[0m\n", output.getvalue())
         self.assertEqual(storage.read_auth(storage.account_path("one"))["tokens"]["refresh_token"], "one-rotated")
         self.assertEqual(storage.read_auth(storage.active_auth_path())["tokens"]["refresh_token"], "one-rotated")
 

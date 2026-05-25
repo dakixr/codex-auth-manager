@@ -188,11 +188,11 @@ def cmd_login(name: str, *, device_auth: bool = True) -> int:
 
 
 def cmd_quota(name: str | None) -> int:
+    active = identify_active()
     if name is not None:
-        _print_quota(name, fetch_quota(name, sync_active=True))
+        _print_quota(name, fetch_quota(name, sync_active=True), active=active)
         return 0
 
-    active = identify_active()
     successes = 0
     skipped = 0
     for result in fetch_quotas([account.name for account in list_accounts()]):
@@ -205,7 +205,7 @@ def cmd_quota(name: str | None) -> int:
             switch_account(result.name)
         if successes:
             print("")
-        _print_quota(result.name, result.snapshot)
+        _print_quota(result.name, result.snapshot, active=active)
         successes += 1
     if skipped:
         print(f"Skipped {skipped} account(s)")
@@ -312,8 +312,9 @@ def cmd_import(path: Path) -> int:
     return 0
 
 
-def _print_quota(name: str, snapshot: Snapshot) -> None:
-    print(quota_block(name, snapshot))
+def _print_quota(name: str, snapshot: Snapshot, *, active: str | None = None) -> None:
+    marker = " *" if name == active else ""
+    print(quota_block(f"{name}{marker}", snapshot))
 
 
 def _quota_text(snapshot: Snapshot) -> str:
