@@ -86,6 +86,13 @@ Manually switch to a named account:
 cxauth switch dr7878
 ```
 
+Export every saved auth JSON for another system. Without `-o`, this prints bearer credentials to stdout:
+
+```bash
+cxauth export -o codex-auths.json
+cxauth export
+```
+
 ## Commands
 
 ```bash
@@ -95,7 +102,27 @@ cxauth login NAME [--browser]
 cxauth quota NAME
 cxauth use-best [NAME ...]
 cxauth remove NAME  # alias: rm
+cxauth export [-o FILE]
 ```
+
+## Export format
+
+`cxauth export` emits a JSON object keyed by account name:
+
+```json
+{
+  "dr7878": {
+    "auth_mode": "chatgpt",
+    "tokens": {
+      "access_token": "...",
+      "id_token": "...",
+      "refresh_token": "..."
+    }
+  }
+}
+```
+
+Treat exports as secrets. The `-o` path is written with `0600` permissions.
 
 ## Limits
 

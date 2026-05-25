@@ -144,6 +144,18 @@ class StorageTests(unittest.TestCase):
 
         self.assertEqual(storage.identify_active(), "two")
 
+    def test_export_writes_all_accounts(self) -> None:
+        storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))
+        storage.write_auth(storage.account_path("two"), auth_data("two", "two@example.com"))
+        output = Path(self.tmp.name) / "export.json"
+
+        self.assertEqual(cli.cmd_export(str(output)), 0)
+        exported = json.loads(output.read_text())
+
+        self.assertEqual(sorted(exported), ["one", "two"])
+        self.assertEqual(exported["one"]["tokens"]["refresh_token"], "one")
+        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
     def test_token_error_detection_reads_codex_stderr(self) -> None:
         self.assertEqual(rpc._token_error("code refresh_token_reused"), "refresh_token_reused")
         self.assertEqual(rpc._clean_rpc_error("body token_invalidated"), "token_invalidated")

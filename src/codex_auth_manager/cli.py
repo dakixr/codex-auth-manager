@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -52,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_use_best(args.accounts)
         if args.command == "remove":
             return cmd_remove(args.name)
+        if args.command == "export":
+            return cmd_export(args.output)
     except (StorageError, RpcError) as exc:
         print(_color(f"Error: {exc}", RED), file=sys.stderr)
         return 1
@@ -176,6 +179,33 @@ def cmd_remove(name: str) -> int:
     return 0
 
 
+def cmd_export(output: str | None) -> int:
+    payload = {
+        account.name: read_auth(account.auth_path)
+        for account in list_accounts()
+    }
+    rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if output is None:
+        print(rendered, end="")
+        return 0
+
+    path = Path(output).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(rendered)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        os.chmod(path, 0o600)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    print(path)
+    return 0
+
+
 def _quota_for(name: str) -> Snapshot:
     account = get_account(name)
     data = read_auth(account.auth_path)
@@ -200,6 +230,8 @@ def _parser() -> argparse.ArgumentParser:
     use_best.add_argument("accounts", nargs="*")
     remove = sub.add_parser("remove", aliases=["rm"])
     remove.add_argument("name")
+    export = sub.add_parser("export")
+    export.add_argument("-o", "--output", help="write exported auth JSON to this file")
     return parser
 
 
