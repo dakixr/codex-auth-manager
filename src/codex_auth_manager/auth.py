@@ -45,11 +45,11 @@ def validate_auth(data: dict[str, Any], source: str = "auth.json") -> None:
 
 
 def summarize(data: dict[str, Any]) -> AuthSummary:
-    tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
+    tokens = _dict_or_empty(data.get("tokens"))
     access = _jwt_payload(tokens.get("access_token"))
     ident = _jwt_payload(tokens.get("id_token"))
-    profile = access.get(PROFILE_KEY) if isinstance(access.get(PROFILE_KEY), dict) else {}
-    auth = access.get(AUTH_KEY) if isinstance(access.get(AUTH_KEY), dict) else {}
+    profile = _dict_or_empty(access.get(PROFILE_KEY))
+    auth = _dict_or_empty(access.get(AUTH_KEY))
     access_exp = _int_or_none(access.get("exp"))
     id_exp = _int_or_none(ident.get("exp"))
     now = int(time.time())
@@ -93,6 +93,10 @@ def _jwt_payload(token: Any) -> dict[str, Any]:
     except (ValueError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _first_str(*values: Any) -> str | None:

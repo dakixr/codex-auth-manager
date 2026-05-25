@@ -6,6 +6,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from typing import Any, cast
 from unittest import mock
 
 from codex_auth_manager import cli, engine, storage
@@ -121,7 +122,7 @@ class StorageTests(unittest.TestCase):
         storage.write_auth(storage.account_path("two"), auth_data("two", "two@example.com"))
 
         def fake_query(data: dict[str, object]) -> Snapshot:
-            tokens = data["tokens"]
+            tokens = cast(dict[str, Any], data["tokens"])
             refresh = tokens["refresh_token"]
             updated = auth_data(f"{refresh}-rotated", f"{refresh}@example.com")
             return Snapshot(
@@ -180,7 +181,7 @@ class StorageTests(unittest.TestCase):
         storage.write_auth(storage.account_path("two"), auth_data("two", "two@example.com"))
 
         def fake_query(data: dict[str, object]) -> Snapshot:
-            tokens = data["tokens"]
+            tokens = cast(dict[str, Any], data["tokens"])
             refresh = tokens["refresh_token"]
             if refresh == "one":
                 session_used = 30
