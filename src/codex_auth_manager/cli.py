@@ -14,6 +14,7 @@ import typer
 
 from .auth import AuthSummary, format_epoch, summarize
 from .rpc import RpcError, Snapshot, query_quota, refresh_auth
+from .selection import score_snapshot
 from .storage import (
     StorageError,
     account_path,
@@ -85,7 +86,7 @@ def quota_command(
 
 @app.command("use-best")
 def use_best_command(accounts: Annotated[list[str] | None, typer.Argument(help="Optional account names")] = None) -> None:
-    """Switch to the account with the lowest current quota usage."""
+    """Switch to the best account using pace-aware quota scoring."""
     with _handle_errors():
         cmd_use_best(accounts or [])
 
@@ -215,21 +216,20 @@ def cmd_quota(name: str | None) -> int:
 def cmd_use_best(names: list[str]) -> int:
     candidates = names or [account.name for account in list_accounts()]
     best_name = ""
-    best_score = 10**9
+    best_score = float("inf")
     best_snapshot: Snapshot | None = None
     skipped = 0
     for name in candidates:
         try:
             snapshot = _quota_for(name)
-            primary = snapshot.default_limit.primary if snapshot.default_limit else None
-            secondary = snapshot.default_limit.secondary if snapshot.default_limit else None
-            p5h = primary.used_percent if primary and isinstance(primary.used_percent, int) else 999
-            pwk = secondary.used_percent if secondary and isinstance(secondary.used_percent, int) else 999
-            score = p5h * 1000 + pwk
-            print(f"{name}: 5h={p5h}% used, week={pwk}% used")
-            if score < best_score:
+            account_score = score_snapshot(snapshot)
+            print(f"{name}: {account_score.summary}")
+            if account_score.rejected:
+                skipped += 1
+                continue
+            if account_score.score < best_score:
                 best_name = name
-                best_score = score
+                best_score = account_score.score
                 best_snapshot = snapshot
         except Exception as exc:
             print(f"{name}: skipped ({exc})")

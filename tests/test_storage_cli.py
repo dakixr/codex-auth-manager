@@ -10,6 +10,7 @@ from unittest import mock
 from codex_auth_manager import cli, storage
 from codex_auth_manager import rpc
 from codex_auth_manager.rpc import RateLimit, Snapshot, Window
+from codex_auth_manager.selection import pace_for_window, score_snapshot
 
 
 def auth_data(refresh: str, email: str = "user@example.com") -> dict[str, object]:
@@ -143,14 +144,21 @@ class StorageTests(unittest.TestCase):
 
         self.assertEqual(run.call_count, 1)
 
-    def test_use_best_switches_lowest_usage_account(self) -> None:
+    def test_use_best_switches_best_paced_account(self) -> None:
         storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))
         storage.write_auth(storage.account_path("two"), auth_data("two", "two@example.com"))
 
         def fake_query(data: dict[str, object]) -> Snapshot:
             tokens = data["tokens"]
             refresh = tokens["refresh_token"]
-            used = 9 if refresh == "one" else 1
+            if refresh == "one":
+                session_used = 30
+                session_reset = 1_900_000_000 + 4 * 3600
+                weekly_used = 10
+            else:
+                session_used = 10
+                session_reset = 1_900_000_000 + 4 * 3600
+                weekly_used = 80
             return Snapshot(
                 email=f"{refresh}@example.com",
                 plan="plus",
@@ -158,18 +166,21 @@ class StorageTests(unittest.TestCase):
                 default_limit=RateLimit(
                     limit_id="codex",
                     limit_name=None,
-                    primary=Window(used_percent=used, resets_at=1_900_000_000, duration_mins=300),
-                    secondary=Window(used_percent=0, resets_at=1_900_000_000, duration_mins=10080),
+                    primary=Window(used_percent=session_used, resets_at=session_reset, duration_mins=300),
+                    secondary=Window(used_percent=weekly_used, resets_at=1_900_000_000 + 4 * 24 * 3600, duration_mins=10080),
                     plan="plus",
                 ),
                 limits={},
                 updated_auth=data,
             )
 
-        with mock.patch.object(cli, "query_quota", side_effect=fake_query):
+        with (
+            mock.patch.object(cli, "query_quota", side_effect=fake_query),
+            mock.patch.object(cli, "score_snapshot", side_effect=lambda snapshot: score_snapshot(snapshot, now=1_900_000_000)),
+        ):
             self.assertEqual(cli.cmd_use_best([]), 0)
 
-        self.assertEqual(storage.identify_active(), "two")
+        self.assertEqual(storage.identify_active(), "one")
 
     def test_export_writes_all_accounts(self) -> None:
         storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))
@@ -187,6 +198,53 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(rpc._token_error("code refresh_token_reused"), "refresh_token_reused")
         self.assertEqual(rpc._clean_rpc_error("body token_invalidated"), "token_invalidated")
         self.assertIsNone(rpc._token_error("ordinary app-server log"))
+
+    def test_pace_reports_reserve_and_deficit(self) -> None:
+        now = 1_900_000_000
+        reserve = pace_for_window(
+            Window(used_percent=10, resets_at=now + 4 * 24 * 3600, duration_mins=10080),
+            now=now,
+            default_window_minutes=10080,
+        )
+        deficit = pace_for_window(
+            Window(used_percent=50, resets_at=now + 4 * 24 * 3600, duration_mins=10080),
+            now=now,
+            default_window_minutes=10080,
+        )
+
+        self.assertIsNotNone(reserve)
+        self.assertIsNotNone(deficit)
+        assert reserve is not None
+        assert deficit is not None
+        self.assertAlmostEqual(reserve.expected_used_percent, 42.857, places=2)
+        self.assertAlmostEqual(reserve.delta_percent, -32.857, places=2)
+        self.assertIn("in reserve", reserve.label)
+        self.assertIn("lasts until reset", reserve.label)
+        self.assertAlmostEqual(deficit.delta_percent, 7.143, places=2)
+        self.assertIn("in deficit", deficit.label)
+        self.assertIn("projected empty", deficit.label)
+
+    def test_score_rejects_exhausted_weekly_window(self) -> None:
+        now = 1_900_000_000
+        snapshot = Snapshot(
+            email="one@example.com",
+            plan="plus",
+            auth_method="chatgpt",
+            default_limit=RateLimit(
+                limit_id="codex",
+                limit_name=None,
+                primary=Window(used_percent=10, resets_at=now + 4 * 3600, duration_mins=300),
+                secondary=Window(used_percent=98, resets_at=now + 4 * 24 * 3600, duration_mins=10080),
+                plan="plus",
+            ),
+            limits={},
+            updated_auth={},
+        )
+
+        score = score_snapshot(snapshot, now=now)
+
+        self.assertTrue(score.rejected)
+        self.assertEqual(score.reject_reason, "weekly >= 98%")
 
 
 if __name__ == "__main__":

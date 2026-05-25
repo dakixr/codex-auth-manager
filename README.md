@@ -62,11 +62,18 @@ If you explicitly want the localhost browser callback flow:
 cxauth login dr7878 --browser
 ```
 
-Choose the account with the lowest current Codex quota usage and switch to it:
+Choose the best account and switch to it:
 
 ```bash
 cxauth use-best
 ```
+
+`use-best` is pace-aware. It compares current usage with how far through each quota window you are:
+
+- usage above expected pace is shown as `in deficit`
+- usage below expected pace is shown as `in reserve`
+- accounts near weekly exhaustion are avoided
+- 5-hour and weekly reset timing affect the score
 
 Show accounts without touching live auth:
 
