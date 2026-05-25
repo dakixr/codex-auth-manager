@@ -13,6 +13,7 @@ from typing import Annotated
 import typer
 
 from .auth import AuthSummary, format_epoch, summarize
+from .display import quota_block
 from .rpc import RpcError, Snapshot, query_quota, refresh_auth
 from .selection import score_snapshot
 from .storage import (
@@ -286,11 +287,7 @@ def _quota_for(name: str) -> Snapshot:
 
 
 def _print_quota(name: str, snapshot: Snapshot) -> None:
-    print(f"{BOLD}Quota for {name}{RESET}")
-    print(f"email: {snapshot.email or '-'}")
-    print(f"plan:  {snapshot.plan or '-'}")
-    print(f"quota: {_quota_text(snapshot)}")
-    print(f"pace:  {score_snapshot(snapshot).summary}")
+    print(quota_block(name, snapshot))
 
 
 def _quota_text(snapshot: Snapshot) -> str:

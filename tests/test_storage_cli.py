@@ -4,13 +4,12 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
-from io import StringIO
 from pathlib import Path
 from unittest import mock
 
 from codex_auth_manager import cli, storage
 from codex_auth_manager import rpc
+from codex_auth_manager.display import quota_block
 from codex_auth_manager.rpc import RateLimit, Snapshot, Window
 from codex_auth_manager.selection import pace_for_window, score_snapshot
 
@@ -90,8 +89,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(storage.read_auth(storage.account_path("one"))["tokens"]["refresh_token"], "new")
         self.assertEqual(storage.read_auth(storage.active_auth_path())["tokens"]["refresh_token"], "new")
 
-    def test_quota_prints_pace_info(self) -> None:
-        storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))
+    def test_quota_display_prints_bars_relative_resets_and_pace_info(self) -> None:
         snapshot = Snapshot(
             email="one@example.com",
             plan="plus",
@@ -107,18 +105,14 @@ class StorageTests(unittest.TestCase):
             updated_auth=auth_data("one", "one@example.com"),
         )
 
-        with (
-            mock.patch.object(cli, "query_quota", return_value=snapshot),
-            mock.patch.object(cli, "score_snapshot", side_effect=lambda value: score_snapshot(value, now=1_900_000_000)),
-        ):
-            output = StringIO()
-            with redirect_stdout(output):
-                self.assertEqual(cli.cmd_quota("one"), 0)
+        text = quota_block("one", snapshot, now=1_900_000_000)
 
-        text = output.getvalue()
-        self.assertIn("pace:", text)
+        self.assertIn("[######--------------]", text)
+        self.assertIn("resets in 4h", text)
+        self.assertIn("resets in 4d", text)
         self.assertIn("10% in deficit", text)
         self.assertIn("33% in reserve", text)
+        self.assertIn("score 32.1", text)
 
     def test_quota_without_name_checks_all_accounts(self) -> None:
         storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))
