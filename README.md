@@ -74,6 +74,7 @@ cxauth use-best
 - usage below expected pace is shown as `in reserve`
 - accounts near weekly exhaustion are avoided
 - 5-hour and weekly reset timing affect the score
+- quota probes run in a small parallel pool, then the selected account is written once
 
 Show accounts without touching live auth:
 

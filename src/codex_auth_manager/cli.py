@@ -5,7 +5,9 @@ import os
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -37,7 +39,15 @@ GREEN = "\033[32m"
 RED = "\033[31m"
 YELLOW = "\033[33m"
 BOLD = "\033[1m"
+USE_BEST_WORKERS = 4
 app = typer.Typer(help="Manage Codex CLI OAuth accounts", no_args_is_help=True)
+
+
+@dataclass(frozen=True)
+class QuotaResult:
+    name: str
+    snapshot: Snapshot | None = None
+    error: Exception | None = None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -220,21 +230,22 @@ def cmd_use_best(names: list[str]) -> int:
     best_score = float("inf")
     best_snapshot: Snapshot | None = None
     skipped = 0
-    for name in candidates:
-        try:
-            snapshot = _quota_for(name)
-            account_score = score_snapshot(snapshot)
-            print(f"{name}: {account_score.summary}")
-            if account_score.rejected:
-                skipped += 1
-                continue
-            if account_score.score < best_score:
-                best_name = name
-                best_score = account_score.score
-                best_snapshot = snapshot
-        except Exception as exc:
-            print(f"{name}: skipped ({exc})")
+    for result in _quota_results_for_use_best(candidates):
+        if result.error is not None or result.snapshot is None:
+            exc = result.error or StorageError("missing quota snapshot")
+            print(f"{result.name}: skipped ({exc})")
             skipped += 1
+            continue
+
+        account_score = score_snapshot(result.snapshot)
+        print(f"{result.name}: {account_score.summary}")
+        if account_score.rejected:
+            skipped += 1
+            continue
+        if account_score.score < best_score:
+            best_name = result.name
+            best_score = account_score.score
+            best_snapshot = result.snapshot
     if not best_name or best_snapshot is None:
         raise StorageError("No usable account found")
     switch_account(best_name)
@@ -284,6 +295,38 @@ def _quota_for(name: str) -> Snapshot:
     snapshot = query_quota(data)
     sync_saved_and_active(name, snapshot.updated_auth)
     return snapshot
+
+
+def _quota_for_selection(name: str) -> Snapshot:
+    account = get_account(name)
+    data = read_auth(account.auth_path)
+    snapshot = query_quota(data)
+    write_auth(account.auth_path, snapshot.updated_auth)
+    return snapshot
+
+
+def _quota_results_for_use_best(names: list[str]) -> list[QuotaResult]:
+    if len(names) <= 1:
+        return [_quota_result(name) for name in names]
+
+    results: list[QuotaResult | None] = [None] * len(names)
+    workers = min(USE_BEST_WORKERS, len(names))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_quota_for_selection, name): (idx, name) for idx, name in enumerate(names)}
+        for future in as_completed(futures):
+            idx, name = futures[future]
+            try:
+                results[idx] = QuotaResult(name=name, snapshot=future.result())
+            except Exception as exc:
+                results[idx] = QuotaResult(name=name, error=exc)
+    return [result for result in results if result is not None]
+
+
+def _quota_result(name: str) -> QuotaResult:
+    try:
+        return QuotaResult(name=name, snapshot=_quota_for_selection(name))
+    except Exception as exc:
+        return QuotaResult(name=name, error=exc)
 
 
 def _print_quota(name: str, snapshot: Snapshot) -> None:

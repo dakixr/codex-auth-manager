@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -207,6 +208,42 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(cli.cmd_use_best([]), 0)
 
         self.assertEqual(storage.identify_active(), "one")
+
+    def test_use_best_quota_results_run_in_parallel_and_keep_order(self) -> None:
+        started: list[str] = []
+        lock = threading.Lock()
+        both_started = threading.Event()
+
+        def snapshot_for(name: str) -> Snapshot:
+            with lock:
+                started.append(name)
+                if len(started) == 2:
+                    both_started.set()
+            if not both_started.wait(timeout=1):
+                raise AssertionError("quota probes ran sequentially")
+            return Snapshot(
+                email=f"{name}@example.com",
+                plan="plus",
+                auth_method="chatgpt",
+                default_limit=RateLimit(
+                    limit_id="codex",
+                    limit_name=None,
+                    primary=Window(used_percent=1, resets_at=1_900_000_000, duration_mins=300),
+                    secondary=Window(used_percent=0, resets_at=1_900_000_000, duration_mins=10080),
+                    plan="plus",
+                ),
+                limits={},
+                updated_auth=auth_data(name, f"{name}@example.com"),
+            )
+
+        with (
+            mock.patch.object(cli, "USE_BEST_WORKERS", 2),
+            mock.patch.object(cli, "_quota_for_selection", side_effect=snapshot_for),
+        ):
+            results = cli._quota_results_for_use_best(["one", "two"])
+
+        self.assertEqual([result.name for result in results], ["one", "two"])
+        self.assertTrue(all(result.error is None for result in results))
 
     def test_export_writes_all_accounts(self) -> None:
         storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))
