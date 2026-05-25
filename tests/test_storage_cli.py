@@ -260,6 +260,28 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(exported["one"]["tokens"]["refresh_token"], "one")
         self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 
+    def test_import_reads_exported_accounts_without_touching_active_auth(self) -> None:
+        storage.write_auth(storage.active_auth_path(), auth_data("active", "active@example.com"))
+        source = Path(self.tmp.name) / "import.json"
+        source.write_text(json.dumps({
+            "one": auth_data("one", "one@example.com"),
+            "two": auth_data("two", "two@example.com"),
+        }))
+
+        self.assertEqual(cli.cmd_import(source), 0)
+
+        self.assertEqual([account.name for account in storage.list_accounts()], ["one", "two"])
+        self.assertEqual(storage.read_auth(storage.account_path("one"))["tokens"]["refresh_token"], "one")
+        self.assertEqual(storage.read_auth(storage.account_path("two"))["tokens"]["refresh_token"], "two")
+        self.assertEqual(storage.read_auth(storage.active_auth_path())["tokens"]["refresh_token"], "active")
+
+    def test_import_rejects_non_object_export(self) -> None:
+        source = Path(self.tmp.name) / "bad.json"
+        source.write_text("[]")
+
+        with self.assertRaises(storage.StorageError):
+            cli.cmd_import(source)
+
     def test_token_error_detection_reads_codex_stderr(self) -> None:
         self.assertEqual(rpc._token_error("code refresh_token_reused"), "refresh_token_reused")
         self.assertEqual(rpc._clean_rpc_error("body token_invalidated"), "token_invalidated")

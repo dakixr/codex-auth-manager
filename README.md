@@ -110,6 +110,12 @@ cxauth export -o codex-auths.json
 cxauth export
 ```
 
+Import auth JSON accounts from an export file:
+
+```bash
+cxauth import codex-auths.json
+```
+
 ## Commands
 
 ```bash
@@ -120,11 +126,12 @@ cxauth quota [NAME]
 cxauth use-best [NAME ...]
 cxauth remove NAME
 cxauth export [-o FILE]
+cxauth import FILE
 ```
 
-## Export format
+## Export And Import Format
 
-`cxauth export` emits a JSON object keyed by account name:
+`cxauth export` emits a JSON object keyed by account name. `cxauth import` accepts the same format:
 
 ```json
 {

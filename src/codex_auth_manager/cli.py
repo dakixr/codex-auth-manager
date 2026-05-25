@@ -107,6 +107,13 @@ def export_command(
         cmd_export(output)
 
 
+@app.command("import")
+def import_command(path: Annotated[Path, typer.Argument(help="JSON file created by cxauth export")]) -> None:
+    """Import saved auth JSON accounts from an export file."""
+    with _handle_errors():
+        cmd_import(path)
+
+
 @contextmanager
 def _handle_errors():
     try:
@@ -269,6 +276,39 @@ def cmd_export(output: str | None) -> int:
         if tmp.exists():
             tmp.unlink()
     print(path)
+    return 0
+
+
+def cmd_import(path: Path) -> int:
+    source = path.expanduser()
+    try:
+        raw = json.loads(source.read_text())
+    except FileNotFoundError as exc:
+        raise StorageError(f"Missing import file: {source}") from exc
+    except json.JSONDecodeError as exc:
+        raise StorageError(f"Invalid JSON in {source}: {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise StorageError("Import file must contain a JSON object keyed by account name")
+
+    imported = 0
+    overwritten = 0
+    for name, data in raw.items():
+        if not isinstance(name, str):
+            raise StorageError("Import account names must be strings")
+        if not isinstance(data, dict):
+            raise StorageError(f"Import entry '{name}' must be an auth JSON object")
+        target = account_path(name)
+        existed = target.exists()
+        write_auth(target, data)
+        imported += 1
+        if existed:
+            overwritten += 1
+            print(_color(f"Warning: overwrote '{name}'", YELLOW))
+
+    print(_color(f"Imported {imported} account(s)", GREEN))
+    if overwritten:
+        print(f"Overwrote {overwritten} account(s)")
     return 0
 
 
