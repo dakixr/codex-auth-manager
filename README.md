@@ -4,7 +4,7 @@ Small `uv`-managed Codex CLI OAuth account manager.
 
 Command: `cxauth`
 
-## Why this exists
+## What it does
 
 Codex stores its active OAuth session in:
 
@@ -18,7 +18,7 @@ This tool stores named copies in an isolated vault:
 ~/.codex-auth/accounts/<name>/auth.json
 ```
 
-Unlike the reference tool this was inspired by, live quota checks always run with `account/read refreshToken=true` and sync any rotated auth file back into the saved account. That avoids losing a newly rotated refresh token inside a temporary `CODEX_HOME`.
+It lets you login, store, inspect, export, and switch between multiple Codex OAuth sessions without manually copying `auth.json` files. Live quota checks refresh tokens safely and sync rotated auth files back into the saved account.
 
 ## Installation
 
@@ -51,15 +51,15 @@ uv run cxauth --help
 Login and save each account. This uses Codex device authorization by default and runs login in an isolated temporary `CODEX_HOME`, so logging in one account does not let Codex touch or refresh the currently active account first:
 
 ```bash
-cxauth login dr7878
-cxauth login apavel
-cxauth login javitj
+cxauth login dakixr
+cxauth login work
+cxauth login personal
 ```
 
 If you explicitly want the localhost browser callback flow:
 
 ```bash
-cxauth login dr7878 --browser
+cxauth login dakixr --browser
 ```
 
 Choose the best account and switch to it:
@@ -85,7 +85,7 @@ cxauth list
 Check one account's live quota:
 
 ```bash
-cxauth quota dr7878
+cxauth quota dakixr
 ```
 
 Quota output includes usage bars, relative reset timing, and the same pace details used by `use-best`, including reserve/deficit and projected exhaustion.
@@ -100,7 +100,7 @@ cxauth quota
 Manually switch to a named account:
 
 ```bash
-cxauth switch dr7878
+cxauth switch dakixr
 ```
 
 Export every saved auth JSON for another system. Without `-o`, this prints bearer credentials to stdout:
@@ -128,7 +128,7 @@ cxauth export [-o FILE]
 
 ```json
 {
-  "dr7878": {
+  "dakixr": {
     "auth_mode": "chatgpt",
     "tokens": {
       "access_token": "...",
