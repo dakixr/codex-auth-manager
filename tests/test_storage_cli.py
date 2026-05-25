@@ -4,6 +4,8 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -87,6 +89,36 @@ class StorageTests(unittest.TestCase):
 
         self.assertEqual(storage.read_auth(storage.account_path("one"))["tokens"]["refresh_token"], "new")
         self.assertEqual(storage.read_auth(storage.active_auth_path())["tokens"]["refresh_token"], "new")
+
+    def test_quota_prints_pace_info(self) -> None:
+        storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))
+        snapshot = Snapshot(
+            email="one@example.com",
+            plan="plus",
+            auth_method="chatgpt",
+            default_limit=RateLimit(
+                limit_id="codex",
+                limit_name=None,
+                primary=Window(used_percent=30, resets_at=1_900_000_000 + 4 * 3600, duration_mins=300),
+                secondary=Window(used_percent=10, resets_at=1_900_000_000 + 4 * 24 * 3600, duration_mins=10080),
+                plan="plus",
+            ),
+            limits={},
+            updated_auth=auth_data("one", "one@example.com"),
+        )
+
+        with (
+            mock.patch.object(cli, "query_quota", return_value=snapshot),
+            mock.patch.object(cli, "score_snapshot", side_effect=lambda value: score_snapshot(value, now=1_900_000_000)),
+        ):
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(cli.cmd_quota("one"), 0)
+
+        text = output.getvalue()
+        self.assertIn("pace:", text)
+        self.assertIn("10% in deficit", text)
+        self.assertIn("33% in reserve", text)
 
     def test_quota_without_name_checks_all_accounts(self) -> None:
         storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))

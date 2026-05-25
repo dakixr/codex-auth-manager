@@ -87,6 +87,8 @@ Check one account's live quota:
 cxauth quota dr7878
 ```
 
+Quota output includes the same pace details used by `use-best`, including reserve/deficit and projected exhaustion.
+
 Check live quota for every saved account:
 
 ```bash

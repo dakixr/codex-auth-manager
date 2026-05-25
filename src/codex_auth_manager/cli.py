@@ -290,6 +290,7 @@ def _print_quota(name: str, snapshot: Snapshot) -> None:
     print(f"email: {snapshot.email or '-'}")
     print(f"plan:  {snapshot.plan or '-'}")
     print(f"quota: {_quota_text(snapshot)}")
+    print(f"pace:  {score_snapshot(snapshot).summary}")
 
 
 def _quota_text(snapshot: Snapshot) -> str:
