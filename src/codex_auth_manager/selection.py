@@ -114,6 +114,20 @@ def pace_for_window(window: Window | None, *, now: float | None = None, default_
     delta = actual - expected
     eta_seconds: float | None = None
     will_last = False
+
+    # Very early in a window, tiny non-zero usage creates absurd projections
+    # such as "1% used, projected empty in 1m". Wait until enough of the window
+    # has elapsed before making any empty/lasts-to-reset claim.
+    if expected < 3:
+        return Pace(
+            used_percent=actual,
+            expected_used_percent=expected,
+            delta_percent=delta,
+            will_last_to_reset=False,
+            eta_seconds=None,
+            resets_in_seconds=resets_in,
+        )
+
     if elapsed > 0 and actual > 0:
         rate = actual / elapsed
         remaining = max(0.0, 100.0 - actual)

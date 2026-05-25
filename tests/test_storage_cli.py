@@ -250,6 +250,21 @@ class StorageTests(unittest.TestCase):
         self.assertIn("in deficit", deficit.label)
         self.assertIn("projected empty", deficit.label)
 
+    def test_pace_suppresses_eta_too_early_in_window(self) -> None:
+        now = 1_900_000_000
+        pace = pace_for_window(
+            Window(used_percent=1, resets_at=now + 5 * 3600 - 60, duration_mins=300),
+            now=now,
+            default_window_minutes=300,
+        )
+
+        self.assertIsNotNone(pace)
+        assert pace is not None
+        self.assertLess(pace.expected_used_percent, 3)
+        self.assertIsNone(pace.eta_seconds)
+        self.assertFalse(pace.will_last_to_reset)
+        self.assertEqual(pace.label, "on pace")
+
     def test_score_rejects_exhausted_weekly_window(self) -> None:
         now = 1_900_000_000
         snapshot = Snapshot(
