@@ -18,7 +18,7 @@ This tool stores named copies in an isolated vault:
 ~/.codex-auth/accounts/<name>/auth.json
 ```
 
-It lets you login, store, inspect, export, and switch between multiple Codex OAuth sessions without manually copying `auth.json` files. Live quota checks refresh tokens safely and sync rotated auth files back into the saved account.
+It lets you login, store, inspect, export, and switch between multiple Codex OAuth sessions without manually copying `auth.json` files. Live quota checks call the ChatGPT Codex usage API directly with the saved access token, refresh only when needed, and sync rotated auth files back into the saved account.
 
 ## Installation
 

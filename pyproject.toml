@@ -9,7 +9,6 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "typer>=0.12,<1",
-    "websockets>=14,<16",
 ]
 
 [project.urls]

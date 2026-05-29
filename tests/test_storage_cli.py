@@ -5,6 +5,7 @@ import os
 import tempfile
 import threading
 import unittest
+import urllib.error
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -315,6 +316,112 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(rpc._clean_rpc_error("body token_invalidated"), "token_invalidated")
         self.assertIsNone(rpc._token_error("ordinary app-server log"))
 
+    def test_query_quota_uses_access_token_without_refresh(self) -> None:
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: int) -> object:
+            requests.append(request)
+            self.assertEqual(timeout, 30)
+            return _Response({
+                "plan_type": "plus",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 22,
+                        "reset_at": 1_900_000_000,
+                        "limit_window_seconds": 18_000,
+                    },
+                    "secondary_window": {
+                        "used_percent": 43,
+                        "reset_at": 1_900_000_000,
+                        "limit_window_seconds": 604_800,
+                    },
+                },
+            })
+
+        with mock.patch.object(rpc.urllib.request, "urlopen", side_effect=fake_urlopen):
+            snapshot = rpc.query_quota(auth_data("refresh", "one@example.com"))
+
+        self.assertEqual(len(requests), 1)
+        request = cast(Any, requests[0])
+        self.assertEqual(request.full_url, rpc.USAGE_URL)
+        self.assertTrue(request.get_header("Authorization").startswith("Bearer header."))
+        self.assertEqual(request.get_header("Chatgpt-account-id"), "one@example.com")
+        self.assertEqual(snapshot.email, "one@example.com")
+        self.assertEqual(
+            snapshot.default_limit.primary.used_percent if snapshot.default_limit and snapshot.default_limit.primary else None,
+            22,
+        )
+        self.assertEqual(
+            snapshot.default_limit.secondary.used_percent if snapshot.default_limit and snapshot.default_limit.secondary else None,
+            43,
+        )
+
+    def test_query_quota_refreshes_after_unauthorized_usage_response(self) -> None:
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: int) -> object:
+            requests.append(request)
+            url = cast(Any, request).full_url
+            if url == rpc.USAGE_URL and len(requests) == 1:
+                raise urllib.error.HTTPError(
+                    rpc.USAGE_URL,
+                    401,
+                    "Unauthorized",
+                    {},
+                    _BytesResponse({"error": {"code": "token_expired"}}),
+                )
+            if url == rpc.TOKEN_URL:
+                tokens = cast(dict[str, str], auth_data("fresh", "one@example.com")["tokens"])
+                return _Response({
+                    "access_token": "fresh-access",
+                    "refresh_token": "fresh-refresh",
+                    "id_token": tokens["id_token"],
+                })
+            return _Response({
+                "plan_type": "plus",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 5,
+                        "reset_at": 1_900_000_000,
+                        "limit_window_seconds": 18_000,
+                    },
+                },
+            })
+
+        with mock.patch.object(rpc.urllib.request, "urlopen", side_effect=fake_urlopen):
+            snapshot = rpc.query_quota(auth_data("refresh", "one@example.com"))
+
+        self.assertEqual([cast(Any, request).full_url for request in requests], [rpc.USAGE_URL, rpc.TOKEN_URL, rpc.USAGE_URL])
+        self.assertEqual(cast(dict[str, Any], snapshot.updated_auth["tokens"])["access_token"], "fresh-access")
+        self.assertEqual(cast(dict[str, Any], snapshot.updated_auth["tokens"])["refresh_token"], "fresh-refresh")
+
+    def test_query_quota_maps_free_weekly_only_window_to_secondary(self) -> None:
+        def fake_urlopen(request: object, timeout: int) -> object:
+            return _Response({
+                "plan_type": "free",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 0,
+                        "reset_at": 1_900_000_000,
+                        "limit_window_seconds": 604_800,
+                    },
+                    "secondary_window": None,
+                },
+            })
+
+        with mock.patch.object(rpc.urllib.request, "urlopen", side_effect=fake_urlopen):
+            snapshot = rpc.query_quota(auth_data("refresh", "one@example.com"))
+
+        self.assertIsNone(snapshot.default_limit.primary if snapshot.default_limit else None)
+        self.assertEqual(
+            snapshot.default_limit.secondary.used_percent if snapshot.default_limit and snapshot.default_limit.secondary else None,
+            0,
+        )
+        self.assertEqual(
+            snapshot.default_limit.secondary.duration_mins if snapshot.default_limit and snapshot.default_limit.secondary else None,
+            10080,
+        )
+
     def test_pace_reports_reserve_and_deficit(self) -> None:
         now = 1_900_000_000
         reserve = pace_for_window(
@@ -376,6 +483,31 @@ class StorageTests(unittest.TestCase):
 
         self.assertTrue(score.rejected)
         self.assertEqual(score.reject_reason, "weekly >= 98%")
+
+
+class _Response:
+    def __init__(self, payload: object) -> None:
+        self.payload = payload
+
+    def __enter__(self) -> "_Response":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode()
+
+
+class _BytesResponse:
+    def __init__(self, payload: object) -> None:
+        self.payload = payload
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode()
+
+    def close(self) -> None:
+        return None
 
 
 if __name__ == "__main__":
