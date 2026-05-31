@@ -14,7 +14,7 @@ from unittest import mock
 
 from codex_auth_manager import cli, engine, storage
 from codex_auth_manager import rpc
-from codex_auth_manager.display import quota_block
+from codex_auth_manager.display import blended_quota_block, quota_block
 from codex_auth_manager.rpc import RateLimit, Snapshot, Window
 from codex_auth_manager.selection import pace_for_window, score_snapshot
 
@@ -140,6 +140,61 @@ class StorageTests(unittest.TestCase):
         self.assertIn("33% in reserve", text)
         self.assertIn("score 32.1", text)
 
+    def test_blended_quota_display_uses_normalized_total_and_pace(self) -> None:
+        now = 1_900_000_000
+        snapshots = [
+            Snapshot(
+                email="one@example.com",
+                plan="plus",
+                auth_method="chatgpt",
+                default_limit=RateLimit(
+                    limit_id="codex",
+                    limit_name=None,
+                    primary=Window(used_percent=20, resets_at=now + 2 * 3600, duration_mins=300),
+                    secondary=Window(used_percent=60, resets_at=now + 21 * 3600, duration_mins=10080),
+                    plan="plus",
+                ),
+                limits={},
+                updated_auth={},
+            ),
+            Snapshot(
+                email="two@example.com",
+                plan="plus",
+                auth_method="chatgpt",
+                default_limit=RateLimit(
+                    limit_id="codex",
+                    limit_name=None,
+                    primary=Window(used_percent=7, resets_at=now + 5 * 3600, duration_mins=300),
+                    secondary=Window(used_percent=11, resets_at=now + 7 * 24 * 3600, duration_mins=10080),
+                    plan="plus",
+                ),
+                limits={},
+                updated_auth={},
+            ),
+            Snapshot(
+                email="three@example.com",
+                plan="plus",
+                auth_method="chatgpt",
+                default_limit=RateLimit(
+                    limit_id="codex",
+                    limit_name=None,
+                    primary=Window(used_percent=1, resets_at=now + 5 * 3600, duration_mins=300),
+                    secondary=Window(used_percent=61, resets_at=now + 22 * 3600, duration_mins=10080),
+                    plan="plus",
+                ),
+                limits={},
+                updated_auth={},
+            ),
+        ]
+
+        text = blended_quota_block(snapshots, now=now)
+
+        self.assertIn("  5h    [##------------------]   9% used,  91% left · resets in 2h", text)
+        self.assertIn("  week  [#########-----------]  44% used,  56% left · resets in 21h", text)
+        self.assertIn("pace  5h:", text)
+        self.assertIn("week:", text)
+        self.assertNotIn("pick", text)
+
     def test_quota_without_name_checks_all_accounts(self) -> None:
         storage.write_auth(storage.active_auth_path(), auth_data("one", "one@example.com"))
         storage.write_auth(storage.account_path("one"), auth_data("one", "one@example.com"))
@@ -172,6 +227,10 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(query.call_count, 2)
         self.assertIn("\033[1mone *\033[0m\n", output.getvalue())
         self.assertIn("\033[1mtwo\033[0m\n", output.getvalue())
+        self.assertIn("--- synthetic blended remaining ---\n\n", output.getvalue())
+        self.assertIn("\033[1mblended total\033[0m\n", output.getvalue())
+        self.assertIn("  1% used,  99% left", output.getvalue())
+        self.assertIn("  0% used, 100% left", output.getvalue())
         self.assertEqual(storage.read_auth(storage.account_path("one"))["tokens"]["refresh_token"], "one-rotated")
         self.assertEqual(storage.read_auth(storage.active_auth_path())["tokens"]["refresh_token"], "one-rotated")
 

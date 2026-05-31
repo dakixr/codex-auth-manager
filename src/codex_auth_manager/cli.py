@@ -13,7 +13,7 @@ from typing import Annotated
 import typer
 
 from .auth import AuthSummary, format_epoch, summarize
-from .display import quota_block
+from .display import blended_quota_block, quota_block
 from .engine import fetch_quota, fetch_quotas
 from .rpc import RpcError, Snapshot
 from .selection import score_snapshot
@@ -195,6 +195,7 @@ def cmd_quota(name: str | None) -> int:
 
     successes = 0
     skipped = 0
+    snapshots: list[Snapshot] = []
     for result in fetch_quotas([account.name for account in list_accounts()]):
         if result.error is not None or result.snapshot is None:
             exc = result.error or StorageError("missing quota snapshot")
@@ -206,11 +207,15 @@ def cmd_quota(name: str | None) -> int:
         if successes:
             print("")
         _print_quota(result.name, result.snapshot, active=active)
+        snapshots.append(result.snapshot)
         successes += 1
     if skipped:
         print(f"Skipped {skipped} account(s)")
     if successes == 0:
         raise StorageError("No usable account found")
+    if successes > 1:
+        print("\n--- synthetic blended remaining ---\n")
+        print(blended_quota_block(snapshots))
     return 0
 
 
