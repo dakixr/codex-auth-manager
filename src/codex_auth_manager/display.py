@@ -25,6 +25,7 @@ def quota_block(name: str, snapshot: Snapshot, *, now: float | None = None) -> s
         f"{BOLD}{name}{RESET}",
         f"  email  {snapshot.email or '-'}",
         f"  plan   {snapshot.plan or '-'}",
+        f"  resets {_reset_credits_text(snapshot.rate_limit_reset_credits)}",
     ]
     limit = snapshot.default_limit
     if limit is None:
@@ -149,6 +150,13 @@ def _reset_text(resets_at: int | None, *, now: float) -> str:
     if delta <= 0:
         return "reset due"
     return f"resets in {_duration(delta)}"
+
+
+def _reset_credits_text(count: int | None) -> str:
+    if count is None:
+        return "-"
+    noun = "reset" if count == 1 else "resets"
+    return f"{count} {noun} available"
 
 
 def _duration(seconds: float) -> str:

@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +15,7 @@ import typer
 
 from .auth import AuthSummary, format_epoch, summarize
 from .display import blended_quota_block, quota_block
-from .engine import fetch_quota, fetch_quotas
+from .engine import fetch_quota, fetch_quotas, use_rate_limit_reset_credit
 from .rpc import RpcError, Snapshot
 from .selection import score_snapshot
 from .storage import (
@@ -82,6 +83,19 @@ def quota_command(
     """Print live quota for one account, or all accounts when NAME is omitted."""
     with _handle_errors():
         raise typer.Exit(cmd_quota(name))
+
+
+@app.command("use-reset")
+def use_reset_command(
+    name: Annotated[str, typer.Argument(help="Saved account name")],
+    idempotency_key: Annotated[
+        str | None,
+        typer.Option("--idempotency-key", help="Reuse only when retrying the same redemption attempt"),
+    ] = None,
+) -> None:
+    """Consume one earned usage limit reset for a saved account."""
+    with _handle_errors():
+        raise typer.Exit(cmd_use_reset(name, idempotency_key))
 
 
 @app.command("use-best")
@@ -219,6 +233,23 @@ def cmd_quota(name: str | None) -> int:
     return 0
 
 
+def cmd_use_reset(name: str, idempotency_key: str | None = None) -> int:
+    redeem_request_id = idempotency_key or str(uuid.uuid4())
+    active = identify_active()
+    result = use_rate_limit_reset_credit(name, redeem_request_id, sync_active=(active == name))
+    if result.code in {"reset", "already_redeemed"}:
+        print(_color(_reset_result_text(result.code, result.windows_reset), GREEN))
+    elif result.code == "nothing_to_reset":
+        print(_color("No eligible usage window needs a reset right now.", YELLOW))
+    elif result.code == "no_credit":
+        print(_color("No usage limit resets are available for this account.", YELLOW))
+    else:
+        raise RpcError(f"unexpected reset result: {result.code}")
+    print(f"account: {name}")
+    print(f"idempotency key: {redeem_request_id}")
+    return 0
+
+
 def cmd_use_best(names: list[str]) -> int:
     candidates = names or [account.name for account in list_accounts()]
     best_name = ""
@@ -327,6 +358,15 @@ def _quota_text(snapshot: Snapshot) -> str:
     if not limit:
         return "-"
     return f"5h={_window(limit.primary)}, week={_window(limit.secondary)}"
+
+
+def _reset_result_text(code: str, windows_reset: int) -> str:
+    if code == "already_redeemed":
+        return "Reset already redeemed for this idempotency key."
+    if windows_reset > 0:
+        noun = "window" if windows_reset == 1 else "windows"
+        return f"Usage reset consumed; reset {windows_reset} {noun}."
+    return "Usage reset consumed."
 
 
 def _window(window: object | None) -> str:

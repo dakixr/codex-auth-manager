@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from .rpc import Snapshot, query_quota
+from .rpc import ConsumeResetResult, Snapshot, consume_rate_limit_reset_credit, query_quota
 from .storage import get_account, read_auth, sync_saved_and_active, write_auth
 
 LIVE_WORKERS = 4
@@ -25,6 +25,17 @@ def fetch_quota(name: str, *, sync_active: bool = False) -> Snapshot:
     else:
         write_auth(account.auth_path, snapshot.updated_auth)
     return snapshot
+
+
+def use_rate_limit_reset_credit(name: str, redeem_request_id: str, *, sync_active: bool = False) -> ConsumeResetResult:
+    account = get_account(name)
+    data = read_auth(account.auth_path)
+    result = consume_rate_limit_reset_credit(data, redeem_request_id)
+    if sync_active:
+        sync_saved_and_active(name, result.updated_auth)
+    else:
+        write_auth(account.auth_path, result.updated_auth)
+    return result
 
 
 def fetch_quotas(names: list[str], *, workers: int | None = None) -> list[QuotaResult]:

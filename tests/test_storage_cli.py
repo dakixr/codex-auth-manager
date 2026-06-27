@@ -15,7 +15,7 @@ from unittest import mock
 from codex_auth_manager import cli, engine, storage
 from codex_auth_manager import rpc
 from codex_auth_manager.display import blended_quota_block, quota_block
-from codex_auth_manager.rpc import RateLimit, Snapshot, Window
+from codex_auth_manager.rpc import ConsumeResetResult, RateLimit, Snapshot, Window
 from codex_auth_manager.selection import pace_for_window, score_snapshot
 
 
@@ -129,10 +129,12 @@ class StorageTests(unittest.TestCase):
             ),
             limits={},
             updated_auth=auth_data("one", "one@example.com"),
+            rate_limit_reset_credits=2,
         )
 
         text = quota_block("one", snapshot, now=1_900_000_000)
 
+        self.assertIn("resets 2 resets available", text)
         self.assertIn("[######--------------]", text)
         self.assertIn("resets in 4h", text)
         self.assertIn("resets in 4d", text)
@@ -395,6 +397,7 @@ class StorageTests(unittest.TestCase):
                         "limit_window_seconds": 604_800,
                     },
                 },
+                "rate_limit_reset_credits": {"available_count": 3},
             })
 
         with mock.patch.object(rpc.urllib.request, "urlopen", side_effect=fake_urlopen):
@@ -414,6 +417,47 @@ class StorageTests(unittest.TestCase):
             snapshot.default_limit.secondary.used_percent if snapshot.default_limit and snapshot.default_limit.secondary else None,
             43,
         )
+        self.assertEqual(snapshot.rate_limit_reset_credits, 3)
+
+    def test_use_reset_consumes_one_credit_for_named_account(self) -> None:
+        storage.write_auth(storage.active_auth_path(), auth_data("old", "one@example.com"))
+        storage.write_auth(storage.account_path("one"), auth_data("old", "one@example.com"))
+        rotated = auth_data("new", "one@example.com")
+        output = StringIO()
+
+        with (
+            mock.patch.object(
+                cli,
+                "use_rate_limit_reset_credit",
+                return_value=ConsumeResetResult(code="reset", windows_reset=2, updated_auth=rotated),
+            ) as consume,
+            mock.patch.object(cli.uuid, "uuid4", return_value="generated-key"),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(cli.cmd_use_reset("one"), 0)
+
+        consume.assert_called_once_with("one", "generated-key", sync_active=True)
+        self.assertIn("Usage reset consumed; reset 2 windows.", output.getvalue())
+        self.assertIn("idempotency key: generated-key", output.getvalue())
+
+    def test_consume_reset_posts_idempotency_key_without_querying_quota(self) -> None:
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: int) -> object:
+            requests.append(request)
+            self.assertEqual(timeout, 30)
+            return _Response({"code": "reset", "windows_reset": 2})
+
+        with mock.patch.object(rpc.urllib.request, "urlopen", side_effect=fake_urlopen):
+            result = rpc.consume_rate_limit_reset_credit(auth_data("refresh", "one@example.com"), "redeem-123")
+
+        self.assertEqual(len(requests), 1)
+        request = cast(Any, requests[0])
+        self.assertEqual(request.full_url, rpc.CONSUME_RESET_URL)
+        self.assertEqual(json.loads(request.data.decode()), {"redeem_request_id": "redeem-123"})
+        self.assertEqual(request.get_header("Chatgpt-account-id"), "one@example.com")
+        self.assertEqual(result.code, "reset")
+        self.assertEqual(result.windows_reset, 2)
 
     def test_query_quota_refreshes_after_unauthorized_usage_response(self) -> None:
         requests: list[object] = []

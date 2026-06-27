@@ -88,7 +88,7 @@ Check one account's live quota:
 cxauth quota dakixr
 ```
 
-Quota output includes usage bars, relative reset timing, and the same pace details used by `use-best`, including reserve/deficit and projected exhaustion.
+Quota output includes usage bars, available usage limit resets, relative reset timing, and the same pace details used by `use-best`, including reserve/deficit and projected exhaustion.
 When checking every account, live quota requests use the same parallel engine as `use-best`.
 
 Check live quota for every saved account:
@@ -96,6 +96,14 @@ Check live quota for every saved account:
 ```bash
 cxauth quota
 ```
+
+Consume one earned usage limit reset for a saved account:
+
+```bash
+cxauth use-reset dakixr
+```
+
+`use-reset` sends a unique idempotency key automatically. If you are retrying the same failed redemption attempt, pass the same key with `--idempotency-key`.
 
 Manually switch to a named account:
 
@@ -123,6 +131,7 @@ cxauth current
 cxauth switch NAME
 cxauth login NAME [--browser]
 cxauth quota [NAME]
+cxauth use-reset NAME [--idempotency-key KEY]
 cxauth use-best [NAME ...]
 cxauth remove NAME
 cxauth export [-o FILE]

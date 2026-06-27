@@ -37,11 +37,28 @@ class Snapshot:
     default_limit: RateLimit | None
     limits: dict[str, RateLimit]
     updated_auth: dict[str, Any]
+    rate_limit_reset_credits: int | None = None
+
+
+@dataclass(frozen=True)
+class ConsumeResetResult:
+    code: str
+    windows_reset: int
+    updated_auth: dict[str, Any]
 
 
 USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+CONSUME_RESET_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
 TOKEN_URL = "https://auth.openai.com/oauth/token"
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+TOKEN_ERRORS = {
+    "unauthorized",
+    "forbidden",
+    "token_expired",
+    "refresh_token_expired",
+    "token_invalidated",
+    "token_revoked",
+}
 
 
 def refresh_auth(auth_data: dict[str, Any]) -> dict[str, Any]:
@@ -57,14 +74,7 @@ def query_quota(auth_data: dict[str, Any]) -> Snapshot:
     try:
         usage = _fetch_usage(data)
     except RpcError as exc:
-        if str(exc) not in {
-            "unauthorized",
-            "forbidden",
-            "token_expired",
-            "refresh_token_expired",
-            "token_invalidated",
-            "token_revoked",
-        }:
+        if str(exc) not in TOKEN_ERRORS:
             raise
         data = _refresh_auth(data)
         usage = _fetch_usage(data)
@@ -72,7 +82,53 @@ def query_quota(auth_data: dict[str, Any]) -> Snapshot:
     return _snapshot_from_usage(usage, data)
 
 
+def consume_rate_limit_reset_credit(auth_data: dict[str, Any], redeem_request_id: str) -> ConsumeResetResult:
+    if not redeem_request_id:
+        raise RpcError("redeem request id must not be empty")
+    data = dict(auth_data)
+    summary = summarize(data)
+    if summary.access_expired:
+        data = _refresh_auth(data)
+
+    try:
+        response = _consume_reset(data, redeem_request_id)
+    except RpcError as exc:
+        if str(exc) not in TOKEN_ERRORS:
+            raise
+        data = _refresh_auth(data)
+        response = _consume_reset(data, redeem_request_id)
+
+    code = _str(response.get("code"))
+    if code not in {"reset", "nothing_to_reset", "no_credit", "already_redeemed"}:
+        raise RpcError("Invalid response from Codex reset API")
+    windows_reset = response.get("windows_reset")
+    return ConsumeResetResult(
+        code=code,
+        windows_reset=windows_reset if isinstance(windows_reset, int) else 0,
+        updated_auth=data,
+    )
+
+
 def _fetch_usage(auth_data: dict[str, Any]) -> dict[str, Any]:
+    raw = _request_json("GET", USAGE_URL, headers=_auth_headers(auth_data))
+    if not isinstance(raw, dict):
+        raise RpcError("Invalid response from Codex usage API")
+    return raw
+
+
+def _consume_reset(auth_data: dict[str, Any], redeem_request_id: str) -> dict[str, Any]:
+    raw = _request_json(
+        "POST",
+        CONSUME_RESET_URL,
+        headers={**_auth_headers(auth_data), "Content-Type": "application/json"},
+        body={"redeem_request_id": redeem_request_id},
+    )
+    if not isinstance(raw, dict):
+        raise RpcError("Invalid response from Codex reset API")
+    return raw
+
+
+def _auth_headers(auth_data: dict[str, Any]) -> dict[str, str]:
     tokens = _tokens(auth_data)
     access_token = _str(tokens.get("access_token"))
     if not access_token:
@@ -86,11 +142,7 @@ def _fetch_usage(auth_data: dict[str, Any]) -> dict[str, Any]:
     account_id = _str(tokens.get("account_id"))
     if account_id:
         headers["ChatGPT-Account-Id"] = account_id
-
-    raw = _request_json("GET", USAGE_URL, headers=headers)
-    if not isinstance(raw, dict):
-        raise RpcError("Invalid response from Codex usage API")
-    return raw
+    return headers
 
 
 def _refresh_auth(auth_data: dict[str, Any]) -> dict[str, Any]:
@@ -185,7 +237,16 @@ def _snapshot_from_usage(usage: dict[str, Any], auth_data: dict[str, Any]) -> Sn
         default_limit=default_limit,
         limits=limits,
         updated_auth=auth_data,
+        rate_limit_reset_credits=_reset_credits(usage),
     )
+
+
+def _reset_credits(usage: dict[str, Any]) -> int | None:
+    raw = usage.get("rate_limit_reset_credits")
+    if not isinstance(raw, dict):
+        return None
+    available = raw.get("available_count")
+    return available if isinstance(available, int) else None
 
 
 def _parse_limit(
