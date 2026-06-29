@@ -38,6 +38,7 @@ class Snapshot:
     limits: dict[str, RateLimit]
     updated_auth: dict[str, Any]
     rate_limit_reset_credits: int | None = None
+    rate_limit_reset_credit_expirations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class ConsumeResetResult:
 
 
 USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 CONSUME_RESET_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
 TOKEN_URL = "https://auth.openai.com/oauth/token"
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -79,7 +81,12 @@ def query_quota(auth_data: dict[str, Any]) -> Snapshot:
         data = _refresh_auth(data)
         usage = _fetch_usage(data)
 
-    return _snapshot_from_usage(usage, data)
+    try:
+        reset_credits = _fetch_reset_credits(data)
+    except RpcError:
+        reset_credits = None
+
+    return _snapshot_from_usage(usage, data, reset_credits=reset_credits)
 
 
 def consume_rate_limit_reset_credit(auth_data: dict[str, Any], redeem_request_id: str) -> ConsumeResetResult:
@@ -113,6 +120,17 @@ def _fetch_usage(auth_data: dict[str, Any]) -> dict[str, Any]:
     raw = _request_json("GET", USAGE_URL, headers=_auth_headers(auth_data))
     if not isinstance(raw, dict):
         raise RpcError("Invalid response from Codex usage API")
+    return raw
+
+
+def _fetch_reset_credits(auth_data: dict[str, Any]) -> dict[str, Any]:
+    raw = _request_json(
+        "GET",
+        RESET_CREDITS_URL,
+        headers={**_auth_headers(auth_data), "OpenAI-Beta": "codex-1", "originator": "Codex Desktop"},
+    )
+    if not isinstance(raw, dict):
+        raise RpcError("Invalid response from Codex reset credits API")
     return raw
 
 
@@ -208,7 +226,12 @@ def _http_error_message(exc: urllib.error.HTTPError) -> str:
         return str(exc)
 
 
-def _snapshot_from_usage(usage: dict[str, Any], auth_data: dict[str, Any]) -> Snapshot:
+def _snapshot_from_usage(
+    usage: dict[str, Any],
+    auth_data: dict[str, Any],
+    *,
+    reset_credits: dict[str, Any] | None = None,
+) -> Snapshot:
     summary = summarize(auth_data)
     plan = _str(usage.get("plan_type")) or summary.plan
     default_limit = _parse_limit(usage.get("rate_limit"), limit_id="codex", plan=plan)
@@ -230,6 +253,10 @@ def _snapshot_from_usage(usage: dict[str, Any], auth_data: dict[str, Any]) -> Sn
             if limit and limit.limit_id:
                 limits[limit.limit_id] = limit
 
+    reset_credit_count = _reset_credits(reset_credits) if reset_credits is not None else None
+    if reset_credit_count is None:
+        reset_credit_count = _reset_credits(usage)
+
     return Snapshot(
         email=summary.email,
         plan=plan,
@@ -237,16 +264,33 @@ def _snapshot_from_usage(usage: dict[str, Any], auth_data: dict[str, Any]) -> Sn
         default_limit=default_limit,
         limits=limits,
         updated_auth=auth_data,
-        rate_limit_reset_credits=_reset_credits(usage),
+        rate_limit_reset_credits=reset_credit_count,
+        rate_limit_reset_credit_expirations=_reset_credit_expirations(reset_credits),
     )
 
 
 def _reset_credits(usage: dict[str, Any]) -> int | None:
     raw = usage.get("rate_limit_reset_credits")
     if not isinstance(raw, dict):
-        return None
+        raw = usage
     available = raw.get("available_count")
     return available if isinstance(available, int) else None
+
+
+def _reset_credit_expirations(reset_credits: dict[str, Any] | None) -> tuple[str, ...]:
+    if reset_credits is None:
+        return ()
+    raw_credits = reset_credits.get("credits")
+    if not isinstance(raw_credits, list):
+        return ()
+    expirations: list[str] = []
+    for credit in raw_credits:
+        if not isinstance(credit, dict) or credit.get("status") != "available":
+            continue
+        expires_at = _str(credit.get("expires_at"))
+        if expires_at:
+            expirations.append(expires_at)
+    return tuple(sorted(expirations))
 
 
 def _parse_limit(

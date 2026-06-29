@@ -88,7 +88,7 @@ Check one account's live quota:
 cxauth quota dakixr
 ```
 
-Quota output includes usage bars, available usage limit resets, relative reset timing, and the same pace details used by `use-best`, including reserve/deficit and projected exhaustion.
+Quota output includes usage bars, available usage limit resets with all expiry timings, relative reset timing, and the same pace details used by `use-best`, including reserve/deficit and projected exhaustion.
 When checking every account, live quota requests use the same parallel engine as `use-best`.
 
 Check live quota for every saved account:

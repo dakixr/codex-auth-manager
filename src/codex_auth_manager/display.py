@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import datetime
 
 from .rpc import Snapshot, Window
 from .selection import AccountScore, pace_for_window, score_snapshot
@@ -25,7 +26,7 @@ def quota_block(name: str, snapshot: Snapshot, *, now: float | None = None) -> s
         f"{BOLD}{name}{RESET}",
         f"  email  {snapshot.email or '-'}",
         f"  plan   {snapshot.plan or '-'}",
-        f"  resets {_reset_credits_text(snapshot.rate_limit_reset_credits)}",
+        f"  credits {_reset_credits_text(snapshot.rate_limit_reset_credits, snapshot.rate_limit_reset_credit_expirations, now=now)}",
     ]
     limit = snapshot.default_limit
     if limit is None:
@@ -152,11 +153,36 @@ def _reset_text(resets_at: int | None, *, now: float) -> str:
     return f"resets in {_duration(delta)}"
 
 
-def _reset_credits_text(count: int | None) -> str:
+def _reset_credits_text(count: int | None, expirations: tuple[str, ...] = (), *, now: float | None = None) -> str:
     if count is None:
         return "-"
     noun = "reset" if count == 1 else "resets"
-    return f"{count} {noun} available"
+    text = f"{count} {noun} available"
+    expiration_text = _reset_credit_expirations_text(expirations, now=now)
+    if expiration_text:
+        text += f" · expires {expiration_text}"
+    return text
+
+
+def _reset_credit_expirations_text(expirations: tuple[str, ...], *, now: float | None = None) -> str | None:
+    parsed = [_parse_iso_epoch(expiration) for expiration in expirations]
+    parsed = sorted(expiration for expiration in parsed if expiration is not None)
+    if not parsed:
+        return None
+    current = time.time() if now is None else now
+    parts = []
+    for index, expiration in enumerate(parsed, start=1):
+        delta = expiration - current
+        when = "now" if delta <= 0 else f"in {_duration(delta)}"
+        parts.append(f"#{index} {when}")
+    return ", ".join(parts)
+
+
+def _parse_iso_epoch(value: str) -> float | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def _duration(seconds: float) -> str:

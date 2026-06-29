@@ -130,11 +130,12 @@ class StorageTests(unittest.TestCase):
             limits={},
             updated_auth=auth_data("one", "one@example.com"),
             rate_limit_reset_credits=2,
+            rate_limit_reset_credit_expirations=("2030-03-17T21:46:40Z", "2030-03-18T21:46:40Z"),
         )
 
         text = quota_block("one", snapshot, now=1_900_000_000)
 
-        self.assertIn("resets 2 resets available", text)
+        self.assertIn("credits 2 resets available · expires #1 in 4h, #2 in 28h", text)
         self.assertIn("[######--------------]", text)
         self.assertIn("resets in 4h", text)
         self.assertIn("resets in 4d", text)
@@ -383,6 +384,15 @@ class StorageTests(unittest.TestCase):
         def fake_urlopen(request: object, timeout: int) -> object:
             requests.append(request)
             self.assertEqual(timeout, 30)
+            if cast(Any, request).full_url == rpc.RESET_CREDITS_URL:
+                return _Response({
+                    "available_count": 3,
+                    "credits": [
+                        {"status": "redeemed", "expires_at": "2030-03-16T00:00:00Z"},
+                        {"status": "available", "expires_at": "2030-03-17T21:46:40Z"},
+                        {"status": "available", "expires_at": "2030-03-18T21:46:40Z"},
+                    ],
+                })
             return _Response({
                 "plan_type": "plus",
                 "rate_limit": {
@@ -403,9 +413,12 @@ class StorageTests(unittest.TestCase):
         with mock.patch.object(rpc.urllib.request, "urlopen", side_effect=fake_urlopen):
             snapshot = rpc.query_quota(auth_data("refresh", "one@example.com"))
 
-        self.assertEqual(len(requests), 1)
+        self.assertEqual(len(requests), 2)
         request = cast(Any, requests[0])
         self.assertEqual(request.full_url, rpc.USAGE_URL)
+        reset_request = cast(Any, requests[1])
+        self.assertEqual(reset_request.full_url, rpc.RESET_CREDITS_URL)
+        self.assertEqual(reset_request.get_header("Openai-beta"), "codex-1")
         self.assertTrue(request.get_header("Authorization").startswith("Bearer header."))
         self.assertEqual(request.get_header("Chatgpt-account-id"), "one@example.com")
         self.assertEqual(snapshot.email, "one@example.com")
@@ -418,6 +431,10 @@ class StorageTests(unittest.TestCase):
             43,
         )
         self.assertEqual(snapshot.rate_limit_reset_credits, 3)
+        self.assertEqual(
+            snapshot.rate_limit_reset_credit_expirations,
+            ("2030-03-17T21:46:40Z", "2030-03-18T21:46:40Z"),
+        )
 
     def test_use_reset_consumes_one_credit_for_named_account(self) -> None:
         storage.write_auth(storage.active_auth_path(), auth_data("old", "one@example.com"))
@@ -494,7 +511,10 @@ class StorageTests(unittest.TestCase):
         with mock.patch.object(rpc.urllib.request, "urlopen", side_effect=fake_urlopen):
             snapshot = rpc.query_quota(auth_data("refresh", "one@example.com"))
 
-        self.assertEqual([cast(Any, request).full_url for request in requests], [rpc.USAGE_URL, rpc.TOKEN_URL, rpc.USAGE_URL])
+        self.assertEqual(
+            [cast(Any, request).full_url for request in requests],
+            [rpc.USAGE_URL, rpc.TOKEN_URL, rpc.USAGE_URL, rpc.RESET_CREDITS_URL],
+        )
         self.assertEqual(cast(dict[str, Any], snapshot.updated_auth["tokens"])["access_token"], "fresh-access")
         self.assertEqual(cast(dict[str, Any], snapshot.updated_auth["tokens"])["refresh_token"], "fresh-refresh")
 
